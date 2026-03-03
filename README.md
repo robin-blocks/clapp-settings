@@ -2,6 +2,17 @@
 
 The default settings clapp for OpenClaw. Provides UI for managing AI providers, models, and session configurations.
 
+**Repo:** https://github.com/robin-blocks/clapp-settings  
+**Parent monorepo:** https://github.com/robin-blocks/clapps
+
+## Installation
+
+This clapp is installed automatically by `@clapps/connect`. To install manually or update:
+
+```bash
+git clone https://github.com/robin-blocks/clapp-settings.git ~/.openclaw/clapps/settings
+```
+
 ## Features
 
 - **Provider Management**: Add, edit, and delete AI provider credentials
@@ -47,29 +58,33 @@ settings/
 | `settings.resetSessionModel` | Reset session to default |
 | `settings.applyDefaultToAll` | Sync all sessions to default |
 
-## Customization
-
-To customize this clapp:
-
-1. The clapp is installed to `~/.openclaw/clapps/settings/`
-2. Edit the files locally — changes take effect on reload
-3. If you want to contribute changes back:
-   ```bash
-   cd ~/.openclaw/clapps/settings
-   git status                    # See your changes
-   git commit -am "My improvement"
-   git push origin main          # Push to your fork
-   # Then open a PR on GitHub
-   ```
-
 ## Development
 
-When developing in the main clapps monorepo:
+This clapp is a git submodule of the main clapps monorepo.
 
+**To customize locally:**
+1. Edit files in `~/.openclaw/clapps/settings/`
+2. Restart the connect server to see changes
+
+**To contribute:**
 ```bash
-# Components are symlinked/copied during build
-pnpm build
+cd ~/.openclaw/clapps/settings
+git checkout -b my-feature
+# Make changes
+git commit -am "Add my feature"
+git push origin my-feature
+# Open PR at https://github.com/robin-blocks/clapp-settings
+```
 
-# Run the connect server
+**In the parent monorepo:**
+```bash
+# Clone with submodules
+git clone --recurse-submodules https://github.com/robin-blocks/clapps.git
+
+# Sync clapp files into packages for build
+pnpm sync:clapps
+
+# Build and run
+pnpm build
 cd packages/connect && node dist/index.js
 ```
