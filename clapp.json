@@ -1,0 +1,25 @@
+{
+  "name": "@clapps/settings",
+  "version": "0.6.0",
+  "description": "AI provider and model settings for OpenClaw",
+  "author": "openclaw",
+  "license": "MIT",
+  "main": "views/settings.app.md",
+  "views": [
+    "views/settings.app.md",
+    "views/default.settings.view.md"
+  ],
+  "components": [
+    "components/ProviderList.tsx",
+    "components/ProviderEditor.tsx",
+    "components/SessionList.tsx"
+  ],
+  "handlers": [
+    "handlers/settings-handler.ts"
+  ],
+  "openclaw": {
+    "minVersion": "2026.2.0",
+    "permissions": ["auth-profiles", "config", "sessions"],
+    "default": true
+  }
+}
