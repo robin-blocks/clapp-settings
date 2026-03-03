@@ -45,6 +45,7 @@ export function ProviderList({ data = "configuredProviders" }: ProviderListProps
   const [selectedModelId, setSelectedModelId] = useState<string>(activeModel ?? "");
   const [isSaving, setIsSaving] = useState(false);
   const [isSlow, setIsSlow] = useState(false);
+  const [saveWarning, setSaveWarning] = useState<string | null>(null);
   
   // Editor modal state
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -61,17 +62,17 @@ export function ProviderList({ data = "configuredProviders" }: ProviderListProps
 
   useEffect(() => {
     if (!activeProvider && !activeProfileId) return;
-    // Only hydrate from backend when there's no local selection yet, or right after save.
-    // This prevents polling/state refresh from clobbering in-progress user selections.
-    if (!selectedProviderId || isSaving) {
+    // Hydrate from backend only on first load, or when form is clean and not saving.
+    // Do NOT overwrite local selection while a save is in progress.
+    if (!selectedProviderId || (!isSaving && !isDirty)) {
       setSelectedProviderId(activeProfileId || activeProvider?.id || "");
     }
-  }, [activeProvider, activeProfileId, isSaving, selectedProviderId]);
+  }, [activeProvider, activeProfileId, isSaving, isDirty, selectedProviderId]);
 
   useEffect(() => {
     if (!activeModel) return;
-    // Keep local selection stable while user is editing.
-    if (!selectedModelId || isSaving || !isDirty) {
+    // Keep local selection stable while user is editing/saving.
+    if (!selectedModelId || (!isSaving && !isDirty)) {
       setSelectedModelId(activeModel);
     }
   }, [activeModel, isSaving, selectedModelId, isDirty]);
@@ -103,6 +104,7 @@ export function ProviderList({ data = "configuredProviders" }: ProviderListProps
     if (profileMatches && modelMatches) {
       setIsSaving(false);
       setIsSlow(false);
+      setSaveWarning(null);
     }
   }, [activeModel, selectedModelId, selectedProviderId, activeProfileId, activeProvider, modelChanged, isSaving]);
 
@@ -110,7 +112,16 @@ export function ProviderList({ data = "configuredProviders" }: ProviderListProps
     if (!isSaving) return;
 
     const slowTimer = setTimeout(() => setIsSlow(true), 10000);
-    return () => clearTimeout(slowTimer);
+    const timeoutTimer = setTimeout(() => {
+      setIsSaving(false);
+      setIsSlow(false);
+      setSaveWarning("Still applying took too long. Changes may still complete in the background.");
+    }, 30000);
+
+    return () => {
+      clearTimeout(slowTimer);
+      clearTimeout(timeoutTimer);
+    };
   }, [isSaving]);
 
   const providerForSelection = providers.find((p) => p.id === selectedProviderId);
@@ -132,6 +143,7 @@ export function ProviderList({ data = "configuredProviders" }: ProviderListProps
     if (!hasChange || !selectedModelId || isSaving) return;
     setIsSaving(true);
     setIsSlow(false);
+    setSaveWarning(null);
 
     if (providerChanged) {
       emit("settings.setActiveProfile", { profileId: selectedProviderId });
@@ -284,6 +296,9 @@ export function ProviderList({ data = "configuredProviders" }: ProviderListProps
             </>
           )}
         </button>
+        {saveWarning && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">{saveWarning}</p>
+        )}
 
         {/* Add provider button */}
         <div className="pt-2 border-t border-border">
