@@ -53,6 +53,8 @@ export function SessionList() {
   };
 
   const overrideCount = sessions.filter(s => s.isOverride).length;
+  const mainSession = sessions.find(s => s.key === "agent:main:main") ?? sessions[0];
+  const mainIsOverride = Boolean(mainSession?.isOverride);
 
   if (sessions.length === 0) {
     return (
@@ -100,6 +102,43 @@ export function SessionList() {
         >
           <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
         </button>
+      </div>
+
+      {/* Source-of-truth summary */}
+      <div className={cn(
+        "rounded-lg border p-3 space-y-2",
+        mainIsOverride ? "border-amber-500/50 bg-amber-500/5" : "border-border bg-muted/30"
+      )}>
+        <div className="text-xs text-muted-foreground">Model source of truth</div>
+        <div className="flex items-center justify-between gap-4 text-sm">
+          <div className="min-w-0">
+            <div className="text-muted-foreground text-xs">Global default</div>
+            <div className="font-medium truncate">{globalModel ?? "unknown"}</div>
+          </div>
+          <div className="min-w-0 text-right">
+            <div className="text-muted-foreground text-xs">This session</div>
+            <div className="font-medium truncate">{mainSession?.model ?? "unknown"}</div>
+          </div>
+        </div>
+        {mainSession && (
+          <div className="flex items-center justify-between">
+            <span className={cn(
+              "text-xs",
+              mainIsOverride ? "text-amber-500" : "text-green-600 dark:text-green-400"
+            )}>
+              {mainIsOverride ? "Session override is active" : "Session matches global default"}
+            </span>
+            {mainIsOverride && (
+              <button
+                onClick={() => handleResetSession(mainSession.key)}
+                disabled={resettingSession === mainSession.key}
+                className="shrink-0 px-2 py-1 text-xs rounded-md border border-border hover:bg-muted transition-colors disabled:opacity-50"
+              >
+                {resettingSession === mainSession.key ? "Resetting…" : "Reset this session"}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Session list */}
