@@ -36,11 +36,12 @@ interface ProviderListProps {
 export function ProviderList({ data = "configuredProviders" }: ProviderListProps) {
   const providers = useClappState<Provider[]>(data) ?? [];
   const activeModel = useClappState<string>("active.model") ?? "";
+  const activeProfileId = useClappState<string>("active.profileId") ?? "";
   const { emit } = useIntent();
 
   const activeProvider = providers.find((p) => p.active) ?? providers[0];
 
-  const [selectedProviderId, setSelectedProviderId] = useState<string>(activeProvider?.id ?? "");
+  const [selectedProviderId, setSelectedProviderId] = useState<string>(activeProfileId || activeProvider?.id || "");
   const [selectedModelId, setSelectedModelId] = useState<string>(activeModel ?? "");
   const [isSaving, setIsSaving] = useState(false);
   const [isSlow, setIsSlow] = useState(false);
@@ -55,17 +56,17 @@ export function ProviderList({ data = "configuredProviders" }: ProviderListProps
   } | null>(null);
 
   const isDirty =
-    selectedProviderId !== (activeProvider?.id ?? "") ||
+    selectedProviderId !== (activeProfileId || activeProvider?.id || "") ||
     selectedModelId !== (activeModel ?? "");
 
   useEffect(() => {
-    if (!activeProvider) return;
+    if (!activeProvider && !activeProfileId) return;
     // Only hydrate from backend when there's no local selection yet, or right after save.
     // This prevents polling/state refresh from clobbering in-progress user selections.
     if (!selectedProviderId || isSaving) {
-      setSelectedProviderId(activeProvider.id);
+      setSelectedProviderId(activeProfileId || activeProvider?.id || "");
     }
-  }, [activeProvider, isSaving, selectedProviderId]);
+  }, [activeProvider, activeProfileId, isSaving, selectedProviderId]);
 
   useEffect(() => {
     if (!activeModel) return;
@@ -89,16 +90,21 @@ export function ProviderList({ data = "configuredProviders" }: ProviderListProps
     }
   }, [availableModels, selectedModelId]);
 
-  const hasChange = Boolean(selectedModelId && selectedModelId !== activeModel);
+  const providerChanged = selectedProviderId !== (activeProfileId || activeProvider?.id || "");
+  const modelChanged = Boolean(selectedModelId && selectedModelId !== activeModel);
+  const hasChange = providerChanged || modelChanged;
 
   useEffect(() => {
     if (!isSaving) return;
 
-    if (activeModel === selectedModelId && activeModel.length > 0) {
+    const profileMatches = (activeProfileId || activeProvider?.id || "") === selectedProviderId;
+    const modelMatches = !modelChanged || (activeModel === selectedModelId && activeModel.length > 0);
+
+    if (profileMatches && modelMatches) {
       setIsSaving(false);
       setIsSlow(false);
     }
-  }, [activeModel, selectedModelId, isSaving]);
+  }, [activeModel, selectedModelId, selectedProviderId, activeProfileId, activeProvider, modelChanged, isSaving]);
 
   useEffect(() => {
     if (!isSaving) return;
@@ -126,7 +132,14 @@ export function ProviderList({ data = "configuredProviders" }: ProviderListProps
     if (!hasChange || !selectedModelId || isSaving) return;
     setIsSaving(true);
     setIsSlow(false);
-    emit("settings.setActiveModel", { model: selectedModelId });
+
+    if (providerChanged) {
+      emit("settings.setActiveProfile", { profileId: selectedProviderId });
+    }
+
+    if (modelChanged) {
+      emit("settings.setActiveModel", { model: selectedModelId });
+    }
   };
 
   const openAddProvider = () => {

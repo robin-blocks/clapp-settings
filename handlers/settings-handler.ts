@@ -132,6 +132,15 @@ export class SettingsHandler {
         this.setActiveProvider(provider.trim().toLowerCase());
         return true;
       }
+      case "settings.setActiveProfile": {
+        const profileId = intent.payload.profileId;
+        if (typeof profileId !== "string" || profileId.trim().length === 0) {
+          console.warn("[settings] Invalid profileId payload, ignoring");
+          return true;
+        }
+        this.setActiveProfile(profileId.trim());
+        return true;
+      }
       case "settings.setActiveModel": {
         const model = intent.payload.model;
         if (typeof model !== "string" || model.trim().length === 0) {
@@ -419,6 +428,40 @@ export class SettingsHandler {
     this.setActiveModel(modelId);
   }
 
+  /** Set the active auth profile for a provider by copying it to <provider>:default */
+  private setActiveProfile(profileId: string): void {
+    try {
+      if (!existsSync(this.authProfilesPath)) {
+        console.warn("[settings] auth-profiles.json not found");
+        return;
+      }
+
+      const profiles: AuthProfilesFile = JSON.parse(readFileSync(this.authProfilesPath, "utf-8"));
+      const selected = profiles.profiles[profileId];
+      if (!selected) {
+        console.warn(`[settings] Profile not found: ${profileId}`);
+        return;
+      }
+
+      const provider = selected.provider;
+      const defaultProfileId = `${provider}:default`;
+
+      if (profileId !== defaultProfileId) {
+        profiles.profiles[defaultProfileId] = {
+          ...selected,
+          customName: selected.customName ?? "default",
+        };
+        writeFileSync(this.authProfilesPath, JSON.stringify(profiles, null, 2), "utf-8");
+      }
+
+      console.log(`✅ Active ${provider} profile set to ${profileId} (via ${defaultProfileId})`);
+      this.writeSettingsState();
+      this.pushSettingsState();
+    } catch (err) {
+      console.error(`[settings] Failed to set active profile: ${(err as Error).message}`);
+    }
+  }
+
   /** Set the active model system-wide */
   private setActiveModel(modelId: string): void {
     const result = spawnSync(
@@ -621,6 +664,17 @@ export class SettingsHandler {
 
       const data: AuthProfilesFile = JSON.parse(readFileSync(this.authProfilesPath, "utf-8"));
 
+      // Determine active profile per provider (prefer <provider>:default)
+      const activeProfileByProvider = new Map<string, string>();
+      for (const [profileId, profile] of Object.entries(data.profiles)) {
+        if (!activeProfileByProvider.has(profile.provider)) {
+          activeProfileByProvider.set(profile.provider, profileId);
+        }
+        if (profileId === `${profile.provider}:default`) {
+          activeProfileByProvider.set(profile.provider, profileId);
+        }
+      }
+
       // Build provider info for each profile
       for (const [profileId, profile] of Object.entries(data.profiles)) {
         let maskedCredential = "";
@@ -643,8 +697,10 @@ export class SettingsHandler {
         }
 
         if (maskedCredential) {
-          // Check if this provider is the active one
-          const isActive = activeModel?.provider === profile.provider;
+          // Active means: active model provider + active profile for that provider
+          const isActive =
+            activeModel?.provider === profile.provider &&
+            activeProfileByProvider.get(profile.provider) === profileId;
           
           // Use custom name if available; otherwise include profile identifier to avoid duplicate labels
           const profileIdentifier = profileId.includes(":") ? profileId.split(":")[1] : profileId;
@@ -950,6 +1006,7 @@ export class SettingsHandler {
         active: {
           isConfigured,
           provider: activeProvider?.name ?? null,
+          profileId: activeProvider?.id ?? null,
           model: activeModel ? `${activeModel.provider}/${activeModel.model}` : null,
         },
         configuredProviders: providers,
