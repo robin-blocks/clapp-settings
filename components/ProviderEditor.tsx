@@ -244,16 +244,67 @@ export function ProviderEditor({ isOpen, onClose, editingProvider }: ProviderEdi
     }
   };
 
-  const handleOAuthLogin = () => {
+  const handleOAuthLogin = async () => {
     if (!selectedProvider) return;
     
     setIsSaving(true);
-    emit("settings.startOAuth", {
-      provider: selectedProvider === "openai" ? "openai-codex" : selectedProvider,
-      customName: customName.trim() || providerConfig?.name,
-    });
+    setError(null);
 
-    // OAuth will redirect, so just show loading
+    try {
+      const provider = selectedProvider === "openai" ? "openai-codex" : selectedProvider;
+      const response = await fetch("/api/oauth/init", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          provider,
+          customName: customName.trim() || providerConfig?.name,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to initiate OAuth");
+      }
+
+      const { authUrl } = await response.json();
+
+      // Open OAuth URL in popup
+      const popup = window.open(
+        authUrl,
+        "oauth",
+        "width=600,height=700,left=200,top=100"
+      );
+
+      if (!popup) {
+        throw new Error("Popup blocked. Please allow popups for this site.");
+      }
+
+      // Poll for popup close
+      const checkInterval = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(checkInterval);
+          setIsSaving(false);
+          // Trigger refresh by closing the modal
+          onClose();
+        }
+      }, 500);
+
+      // Timeout after 5 minutes
+      setTimeout(() => {
+        clearInterval(checkInterval);
+        if (!popup.closed) {
+          popup.close();
+          setIsSaving(false);
+          setError("OAuth timeout. Please try again.");
+        }
+      }, 5 * 60 * 1000);
+
+    } catch (err) {
+      console.error("[oauth] Failed:", err);
+      setError(err instanceof Error ? err.message : "OAuth failed");
+      setIsSaving(false);
+    }
   };
 
   const handleDelete = () => {
