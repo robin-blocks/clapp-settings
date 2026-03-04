@@ -546,8 +546,13 @@ export class SettingsHandler {
         return;
       }
 
-      // Only send /model to main/direct sessions (not cron, hooks, subagents)
-      const mainSessions = sessions.filter(s => s.kind === "direct" || s.key.endsWith(":main"));
+      // Only send /model to user-facing main/direct sessions.
+      // Exclude internal clapps sessions so chat transcript doesn't get polluted with model-control replies.
+      const mainSessions = sessions.filter((s) => {
+        const isMainLike = s.kind === "direct" || s.key.endsWith(":main");
+        const isInternalClapps = s.key.includes(":clapps-chat") || s.key.includes(":clapps-title");
+        return isMainLike && !isInternalClapps;
+      });
 
       for (const session of mainSessions) {
         const idempotencyKey = `clapps-model-${session.key}-${Date.now()}`;
