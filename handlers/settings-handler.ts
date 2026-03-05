@@ -10,6 +10,12 @@ export interface SettingsHandlerOptions {
   stateDir: string;
   store: StateStore;
   authProfilesPath?: string;
+  /** Home directory where openclaw config lives (defaults to os.homedir()) */
+  openclawHome?: string;
+  /** Called after any file write under openclawHome (config, auth-profiles, etc.) */
+  onConfigChanged?: () => void;
+  /** Called after the system default model changes (e.g. to restart gateway) */
+  onModelDefaultChanged?: () => void;
 }
 
 interface AuthProfile {
@@ -49,13 +55,19 @@ export class SettingsHandler {
   private stateDir: string;
   private store: StateStore;
   private authProfilesPath: string;
+  private openclawHome: string;
+  private onConfigChanged?: () => void;
+  private onModelDefaultChanged?: () => void;
 
   constructor(options: SettingsHandlerOptions) {
     this.stateDir = options.stateDir;
     this.store = options.store;
+    this.openclawHome = options.openclawHome ?? homedir();
     this.authProfilesPath =
       options.authProfilesPath ??
-      resolve(homedir(), ".openclaw", "agents", "main", "agent", "auth-profiles.json");
+      resolve(this.openclawHome, ".openclaw", "agents", "main", "agent", "auth-profiles.json");
+    this.onConfigChanged = options.onConfigChanged;
+    this.onModelDefaultChanged = options.onModelDefaultChanged;
   }
 
   /** Returns true if the intent was handled locally (should not be forwarded to ACP) */
@@ -173,6 +185,18 @@ export class SettingsHandler {
     }
   };
 
+  /** Spawn openclaw CLI with correct HOME env */
+  private spawnClaw(args: string[], opts?: { input?: string; timeout?: number }) {
+    const result = spawnSync("openclaw", args, {
+      encoding: "utf-8" as const,
+      timeout: opts?.timeout ?? 15_000,
+      input: opts?.input,
+      env: { ...process.env, HOME: this.openclawHome },
+    });
+    this.onConfigChanged?.();
+    return result;
+  }
+
   /** Generate a unique profile ID */
   private generateProfileId(provider: string, customName?: string): string {
     const suffix = customName 
@@ -203,6 +227,7 @@ export class SettingsHandler {
 
     mkdirSync(dirname(this.authProfilesPath), { recursive: true });
     writeFileSync(this.authProfilesPath, JSON.stringify(profiles, null, 2), "utf-8");
+    this.onConfigChanged?.();
     console.log(`✅ Anthropic API key saved to ${this.authProfilesPath} (profile: ${profileId})`);
 
     this.writeSettingsState();
@@ -214,10 +239,9 @@ export class SettingsHandler {
 
   /** Set Claude subscription token via openclaw CLI */
   private setClaudeToken(token: string, customName?: string): void {
-    const result = spawnSync(
-      "openclaw",
+    const result = this.spawnClaw(
       ["models", "auth", "paste-token", "--provider", "anthropic"],
-      { input: token, encoding: "utf-8", timeout: 15_000 },
+      { input: token },
     );
 
     if (result.status !== 0) {
@@ -239,6 +263,7 @@ export class SettingsHandler {
             }
           }
           writeFileSync(this.authProfilesPath, JSON.stringify(profiles, null, 2), "utf-8");
+          this.onConfigChanged?.();
         }
       } catch {
         // Ignore errors updating custom name
@@ -279,6 +304,7 @@ export class SettingsHandler {
 
     mkdirSync(dirname(this.authProfilesPath), { recursive: true });
     writeFileSync(this.authProfilesPath, JSON.stringify(profiles, null, 2), "utf-8");
+    this.onConfigChanged?.();
     console.log(`✅ OpenAI API key saved to ${this.authProfilesPath} (profile: ${profileId})`);
 
     this.writeSettingsState();
@@ -313,6 +339,7 @@ export class SettingsHandler {
 
     mkdirSync(dirname(this.authProfilesPath), { recursive: true });
     writeFileSync(this.authProfilesPath, JSON.stringify(profiles, null, 2), "utf-8");
+    this.onConfigChanged?.();
     console.log(`✅ Kimi Coding API key saved to ${this.authProfilesPath} (profile: ${profileId})`);
 
     this.writeSettingsState();
@@ -324,10 +351,9 @@ export class SettingsHandler {
 
   /** Start OAuth flow for a provider */
   private startOAuth(provider: string, customName?: string): void {
-    const result = spawnSync(
-      "openclaw",
+    const result = this.spawnClaw(
       ["models", "auth", "login", "--provider", provider],
-      { encoding: "utf-8", timeout: 30_000, stdio: "inherit" },
+      { timeout: 30_000 },
     );
 
     if (result.status !== 0) {
@@ -347,6 +373,7 @@ export class SettingsHandler {
             }
           }
           writeFileSync(this.authProfilesPath, JSON.stringify(profiles, null, 2), "utf-8");
+          this.onConfigChanged?.();
         }
       } catch {
         // Ignore errors
@@ -379,6 +406,7 @@ export class SettingsHandler {
 
       delete profiles.profiles[profileId];
       writeFileSync(this.authProfilesPath, JSON.stringify(profiles, null, 2), "utf-8");
+      this.onConfigChanged?.();
       console.log(`✅ Deleted provider profile: ${profileId}`);
 
       this.writeSettingsState();
@@ -394,7 +422,7 @@ export class SettingsHandler {
   /** Set an environment variable in openclaw.json */
   private setEnvVar(key: string, value: string): void {
     try {
-      const configPath = resolve(homedir(), ".openclaw", "openclaw.json");
+      const configPath = resolve(this.openclawHome, ".openclaw", "openclaw.json");
       let config: Record<string, unknown> = {};
       
       if (existsSync(configPath)) {
@@ -411,6 +439,7 @@ export class SettingsHandler {
       }
 
       writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
+      this.onConfigChanged?.();
       console.log(`[settings] Set ${key} in openclaw.json`);
     } catch (err) {
       console.warn(`[settings] Failed to set env var ${key}: ${err}`);
@@ -452,6 +481,7 @@ export class SettingsHandler {
           customName: selected.customName ?? "default",
         };
         writeFileSync(this.authProfilesPath, JSON.stringify(profiles, null, 2), "utf-8");
+        this.onConfigChanged?.();
       }
 
       console.log(`✅ Active ${provider} profile set to ${profileId} (via ${defaultProfileId})`);
@@ -464,10 +494,9 @@ export class SettingsHandler {
 
   /** Set the active model system-wide */
   private setActiveModel(modelId: string): void {
-    const result = spawnSync(
-      "openclaw",
+    const result = this.spawnClaw(
       ["models", "set", modelId],
-      { encoding: "utf-8", timeout: 20_000 },
+      { timeout: 20_000 },
     );
 
     if (result.status !== 0) {
@@ -478,6 +507,9 @@ export class SettingsHandler {
 
     this.clearAgentModelOverrides(modelId);
 
+    // Let deployment handle gateway restart/reload
+    this.onModelDefaultChanged?.();
+
     console.log(`✅ Active model set system-wide to ${modelId}`);
 
     this.writeSettingsState();
@@ -487,7 +519,7 @@ export class SettingsHandler {
   /** Clear per-agent model overrides so all agents use the system default */
   private clearAgentModelOverrides(newModelId: string): void {
     try {
-      const configPath = resolve(homedir(), ".openclaw", "openclaw.json");
+      const configPath = resolve(this.openclawHome, ".openclaw", "openclaw.json");
       if (!existsSync(configPath)) return;
 
       const config = JSON.parse(readFileSync(configPath, "utf-8"));
@@ -511,6 +543,7 @@ export class SettingsHandler {
           }
           
           writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
+          this.onConfigChanged?.();
           console.log(`[settings] Saved openclaw.json with updated agent models`);
         }
       }
@@ -522,68 +555,57 @@ export class SettingsHandler {
     this.patchAllSessionModels(newModelId);
   }
 
-  /** Set model override for all active sessions via /model command */
+  /** Patch model on all direct sessions by writing the sessions store directly */
   private patchAllSessionModels(newModelId: string): void {
     try {
-      // First, list all sessions
-      const listResult = spawnSync(
-        "openclaw",
-        ["gateway", "call", "sessions.list", "--params", '{"limit": 100}', "--json"],
-        { encoding: "utf-8", timeout: 15_000 },
+      const [provider, ...rest] = newModelId.split("/");
+      const model = rest.join("/");
+      if (!provider || !model) {
+        console.warn(`[settings] Invalid model ID: ${newModelId}`);
+        return;
+      }
+
+      const sessionsPath = resolve(
+        this.openclawHome, ".openclaw", "agents", "main", "sessions", "sessions.json",
       );
-
-      if (listResult.status !== 0) {
-        console.warn(`[settings] Failed to list sessions: ${listResult.stderr}`);
+      if (!existsSync(sessionsPath)) {
+        console.warn(`[settings] Sessions file not found: ${sessionsPath}`);
         return;
       }
 
-      let sessions: { key: string; kind: string }[] = [];
-      try {
-        const parsed = JSON.parse(listResult.stdout);
-        sessions = parsed.sessions || [];
-      } catch {
-        console.warn(`[settings] Failed to parse sessions list`);
-        return;
-      }
+      const sessions = JSON.parse(readFileSync(sessionsPath, "utf-8"));
+      let changed = 0;
 
-      // Only send /model to user-facing main/direct sessions.
-      // Exclude internal clapps sessions so chat transcript doesn't get polluted with model-control replies.
-      const mainSessions = sessions.filter((s) => {
-        const isMainLike = s.kind === "direct" || s.key.endsWith(":main");
-        const isInternalClapps = s.key.includes(":clapps-chat") || s.key.includes(":clapps-title");
-        return isMainLike && !isInternalClapps;
-      });
+      for (const [key, sess] of Object.entries(sessions as Record<string, Record<string, unknown>>)) {
+        // Only patch direct (user-facing) sessions, skip internal clapps sessions
+        if (key.includes(":clapps-chat") || key.includes(":clapps-title")) continue;
+        const kind = sess.chatType ?? sess.kind;
+        if (kind !== "direct") continue;
 
-      for (const session of mainSessions) {
-        const idempotencyKey = `clapps-model-${session.key}-${Date.now()}`;
-        const sendResult = spawnSync(
-          "openclaw",
-          [
-            "gateway", "call", "chat.send",
-            "--params", JSON.stringify({
-              sessionKey: session.key,
-              message: `/model ${newModelId}`,
-              idempotencyKey,
-            }),
-          ],
-          { encoding: "utf-8", timeout: 10_000 },
-        );
-
-        if (sendResult.status === 0) {
-          console.log(`[settings] Sent /model to session "${session.key}"`);
-        } else {
-          console.warn(`[settings] Failed to send /model to "${session.key}": ${sendResult.stderr}`);
+        if (sess.modelProvider !== provider || sess.model !== model) {
+          sess.modelProvider = provider;
+          sess.model = model;
+          changed++;
+          console.log(`[settings] Patched session "${key}" model to ${newModelId}`);
         }
       }
+
+      if (changed > 0) {
+        writeFileSync(sessionsPath, JSON.stringify(sessions, null, 2), "utf-8");
+        this.onConfigChanged?.();
+        console.log(`[settings] Updated ${changed} session(s) to ${newModelId}`);
+      } else {
+        console.log(`[settings] All sessions already on ${newModelId}`);
+      }
     } catch (err) {
-      console.warn(`[settings] Failed to update session models: ${err}`);
+      console.warn(`[settings] Failed to patch session models: ${err}`);
     }
   }
 
   /** Get the active model from OpenClaw config */
   private getActiveModel(): { provider: string; model: string } | null {
     try {
-      const configPath = resolve(homedir(), ".openclaw", "openclaw.json");
+      const configPath = resolve(this.openclawHome, ".openclaw", "openclaw.json");
       if (!existsSync(configPath)) return null;
 
       const config = JSON.parse(readFileSync(configPath, "utf-8"));
@@ -603,7 +625,7 @@ export class SettingsHandler {
   private getModelCatalogByProvider(): Map<string, ModelOption[]> {
     const map = new Map<string, ModelOption[]>();
     try {
-      const configPath = resolve(homedir(), ".openclaw", "openclaw.json");
+      const configPath = resolve(this.openclawHome, ".openclaw", "openclaw.json");
       if (!existsSync(configPath)) return map;
 
       const config = JSON.parse(readFileSync(configPath, "utf-8"));
@@ -646,6 +668,30 @@ export class SettingsHandler {
     const normalizedProvider = normalizedProviderAliases[provider] ?? provider;
     const models = modelsByProvider.get(normalizedProvider) ?? [];
     return models[0]?.id ?? null;
+  }
+
+  /** Hardcoded fallback models for providers not yet in the catalog */
+  private getDefaultModels(provider: string): ModelOption[] {
+    const defaults: Record<string, ModelOption[]> = {
+      "openai-codex": [
+        { id: "openai-codex/gpt-5.3-codex", label: "GPT-5.3 Codex" },
+        { id: "openai-codex/gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark" },
+        { id: "openai-codex/gpt-5.2-codex", label: "GPT-5.2 Codex" },
+        { id: "openai-codex/gpt-5.2", label: "GPT-5.2" },
+        { id: "openai-codex/gpt-5.1", label: "GPT-5.1" },
+        { id: "openai-codex/gpt-5.1-codex-mini", label: "GPT-5.1 Codex Mini" },
+      ],
+      openai: [
+        { id: "openai/gpt-5.3-codex", label: "GPT-5.3 Codex" },
+        { id: "openai/gpt-5.2-codex", label: "GPT-5.2 Codex" },
+        { id: "openai/gpt-5.2", label: "GPT-5.2" },
+        { id: "openai/gpt-5.1-codex", label: "GPT-5.1 Codex" },
+        { id: "openai/gpt-5", label: "GPT-5" },
+        { id: "openai/o3", label: "o3" },
+        { id: "openai/o4-mini", label: "o4-mini" },
+      ],
+    };
+    return defaults[provider] ?? [];
   }
 
   /** Build a human-readable model label */
@@ -720,7 +766,7 @@ export class SettingsHandler {
             authType,
             maskedCredential,
             active: isActive,
-            models: modelsByProvider.get(profile.provider) ?? [],
+            models: modelsByProvider.get(profile.provider) ?? this.getDefaultModels(profile.provider),
           });
         }
       }
@@ -808,10 +854,8 @@ export class SettingsHandler {
   /** List all active sessions with their current model */
   private listSessions(): void {
     try {
-      const listResult = spawnSync(
-        "openclaw",
+      const listResult = this.spawnClaw(
         ["gateway", "call", "sessions.list", "--params", '{"limit": 50}', "--json"],
-        { encoding: "utf-8", timeout: 15_000 },
       );
 
       if (listResult.status !== 0) {
@@ -839,8 +883,8 @@ export class SettingsHandler {
       }
 
       const globalDefault = this.getActiveModel();
-      const globalModelId = globalDefault 
-        ? `${globalDefault.provider}/${globalDefault.model}` 
+      const globalModelId = globalDefault
+        ? `${globalDefault.provider}/${globalDefault.model}`
         : null;
 
       // Transform sessions for the UI
@@ -953,28 +997,36 @@ export class SettingsHandler {
     }
 
     const modelId = `${globalDefault.provider}/${globalDefault.model}`;
-    
-    const result = spawnSync(
-      "openclaw",
-      [
-        "gateway", "call", "chat.send",
-        "--params", JSON.stringify({
-          sessionKey,
-          message: `/model ${modelId}`,
-          idempotencyKey: `clapps-reset-${sessionKey}-${Date.now()}`,
-        }),
-      ],
-      { encoding: "utf-8", timeout: 10_000 },
-    );
+    const [provider, ...rest] = modelId.split("/");
+    const model = rest.join("/");
 
-    if (result.status === 0) {
-      console.log(`[settings] Reset session "${sessionKey}" to default model`);
-    } else {
-      console.warn(`[settings] Failed to reset session "${sessionKey}": ${result.stderr}`);
+    try {
+      const sessionsPath = resolve(
+        this.openclawHome, ".openclaw", "agents", "main", "sessions", "sessions.json",
+      );
+      if (!existsSync(sessionsPath)) {
+        console.warn(`[settings] Sessions file not found`);
+        return;
+      }
+
+      const sessions = JSON.parse(readFileSync(sessionsPath, "utf-8"));
+      const sess = sessions[sessionKey] as Record<string, unknown> | undefined;
+      if (sess) {
+        sess.modelProvider = provider;
+        sess.model = model;
+        writeFileSync(sessionsPath, JSON.stringify(sessions, null, 2), "utf-8");
+        this.onConfigChanged?.();
+        console.log(`[settings] Reset session "${sessionKey}" to ${modelId}`);
+      } else {
+        console.warn(`[settings] Session "${sessionKey}" not found in sessions file`);
+      }
+    } catch (err) {
+      console.warn(`[settings] Failed to reset session "${sessionKey}": ${err}`);
     }
 
-    // Refresh session list
-    setTimeout(() => this.listSessions(), 1000);
+    // Push updated state immediately from disk
+    this.writeSettingsState(true);
+    this.pushSettingsState();
   }
 
   /** Apply the global default model to all active sessions */
@@ -987,13 +1039,14 @@ export class SettingsHandler {
 
     const modelId = `${globalDefault.provider}/${globalDefault.model}`;
     this.patchAllSessionModels(modelId);
-    
-    // Refresh session list after a delay
-    setTimeout(() => this.listSessions(), 2000);
+
+    // Push updated state immediately — read sessions from disk (not gateway, which has stale cache)
+    this.writeSettingsState(true);
+    this.pushSettingsState();
   }
 
   /** Write settings.json state with provider status */
-  writeSettingsState(): void {
+  writeSettingsState(fromDisk = false): void {
     const providers = this.getConfiguredProviders();
     const isConfigured = providers.length > 0;
     const activeModel = this.getActiveModel();
@@ -1001,8 +1054,8 @@ export class SettingsHandler {
     // Find the active provider
     const activeProvider = providers.find((p) => p.active);
 
-    // Get sessions data to include in settings state
-    const sessionsData = this.getSessionsData();
+    // Get sessions data — fromDisk reads sessions file directly (use after local patches)
+    const sessionsData = fromDisk ? this.getSessionsDataFromDisk() : this.getSessionsData();
 
     const state = {
       version: Date.now(),
@@ -1027,10 +1080,8 @@ export class SettingsHandler {
   /** Get sessions data without writing to separate file */
   private getSessionsData(): { sessions: unknown[]; globalModel: string | null } {
     try {
-      const listResult = spawnSync(
-        "openclaw",
+      const listResult = this.spawnClaw(
         ["gateway", "call", "sessions.list", "--params", '{"limit": 50}', "--json"],
-        { encoding: "utf-8", timeout: 15_000 },
       );
 
       if (listResult.status !== 0) {
@@ -1075,6 +1126,53 @@ export class SettingsHandler {
             modelLabel: this.formatModelLabelFromId(sessionModel),
             isOverride,
             lastUpdated: s.updatedAt ? new Date(s.updatedAt).toISOString() : undefined,
+          };
+        })
+        .sort((a, b) => {
+          if (a.isOverride && !b.isOverride) return -1;
+          if (!a.isOverride && b.isOverride) return 1;
+          return 0;
+        });
+
+      return { sessions, globalModel: globalModelId };
+    } catch {
+      return { sessions: [], globalModel: null };
+    }
+  }
+
+  /** Read sessions directly from the sessions file on disk (bypasses gateway cache) */
+  private getSessionsDataFromDisk(): { sessions: unknown[]; globalModel: string | null } {
+    try {
+      const sessionsPath = resolve(
+        this.openclawHome, ".openclaw", "agents", "main", "sessions", "sessions.json",
+      );
+      if (!existsSync(sessionsPath)) return { sessions: [], globalModel: null };
+
+      const raw = JSON.parse(readFileSync(sessionsPath, "utf-8")) as Record<string, Record<string, unknown>>;
+      const globalDefault = this.getActiveModel();
+      const globalModelId = globalDefault
+        ? `${globalDefault.provider}/${globalDefault.model}`
+        : null;
+
+      const sessions = Object.entries(raw)
+        .filter(([key, sess]) => {
+          const kind = sess.chatType ?? sess.kind;
+          return kind === "direct" && !key.includes(":clapps-chat") && !key.includes(":clapps-title");
+        })
+        .map(([key, sess]) => {
+          const mp = sess.modelProvider as string | undefined;
+          const m = sess.model as string | undefined;
+          const sessionModel = mp && m ? `${mp}/${m}` : (m || globalModelId);
+          const isOverride = sessionModel !== globalModelId;
+          const origin = sess.origin as { label?: string } | undefined;
+
+          return {
+            key,
+            label: this.formatSessionLabel(key, sess.agentId as string | undefined, origin?.label, sess.displayName as string | undefined),
+            model: sessionModel,
+            modelLabel: this.formatModelLabelFromId(sessionModel ?? null),
+            isOverride,
+            lastUpdated: sess.updatedAt ? new Date(sess.updatedAt as number).toISOString() : undefined,
           };
         })
         .sort((a, b) => {

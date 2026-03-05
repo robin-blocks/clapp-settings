@@ -98,13 +98,21 @@ export function ProviderList({ data = "configuredProviders" }: ProviderListProps
   useEffect(() => {
     if (!isSaving) return;
 
-    const profileMatches = (activeProfileId || activeProvider?.id || "") === selectedProviderId;
+    // The server may remap the profile ID (e.g. copy to a ":default" slot),
+    // so compare by provider prefix rather than exact ID.
+    const activeId = activeProfileId || activeProvider?.id || "";
+    const activePrefix = activeId.split(":")[0];
+    const selectedPrefix = selectedProviderId.split(":")[0];
+    const profileMatches = activePrefix === selectedPrefix || activeId === selectedProviderId;
     const modelMatches = !modelChanged || (activeModel === selectedModelId && activeModel.length > 0);
 
     if (profileMatches && modelMatches) {
       setIsSaving(false);
       setIsSlow(false);
       setSaveWarning(null);
+      // Sync selections to the actual active state
+      setSelectedProviderId(activeId);
+      setSelectedModelId(activeModel ?? "");
     }
   }, [activeModel, selectedModelId, selectedProviderId, activeProfileId, activeProvider, modelChanged, isSaving]);
 

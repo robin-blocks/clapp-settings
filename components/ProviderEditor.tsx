@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useIntent } from "@clapps/renderer";
 import { cn } from "@/lib/utils";
-import { X, Eye, EyeOff, Loader2, ExternalLink } from "lucide-react";
+import { X, Eye, EyeOff, Loader2, ExternalLink, Copy, Check, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export type ProviderType = "anthropic" | "openai" | "kimi-coding";
@@ -170,6 +170,10 @@ export function ProviderEditor({ isOpen, onClose, editingProvider }: ProviderEdi
       setShowPassword({});
       setError(null);
       setIsSaving(false);
+      setOauthUrl(null);
+      setCallbackUrl("");
+      setCopied(false);
+      setOauthSuccess(false);
     }
   }, [isOpen, editingProvider]);
 
@@ -244,9 +248,14 @@ export function ProviderEditor({ isOpen, onClose, editingProvider }: ProviderEdi
     }
   };
 
+  const [oauthUrl, setOauthUrl] = useState<string | null>(null);
+  const [callbackUrl, setCallbackUrl] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [oauthSuccess, setOauthSuccess] = useState(false);
+
   const handleOAuthLogin = async () => {
     if (!selectedProvider) return;
-    
+
     setIsSaving(true);
     setError(null);
 
@@ -268,43 +277,59 @@ export function ProviderEditor({ isOpen, onClose, editingProvider }: ProviderEdi
       }
 
       const { authUrl } = await response.json();
-
-      // Open OAuth URL in popup
-      const popup = window.open(
-        authUrl,
-        "oauth",
-        "width=600,height=700,left=200,top=100"
-      );
-
-      if (!popup) {
-        throw new Error("Popup blocked. Please allow popups for this site.");
-      }
-
-      // Poll for popup close
-      const checkInterval = setInterval(() => {
-        if (popup.closed) {
-          clearInterval(checkInterval);
-          setIsSaving(false);
-          // Trigger refresh by closing the modal
-          onClose();
-        }
-      }, 500);
-
-      // Timeout after 5 minutes
-      setTimeout(() => {
-        clearInterval(checkInterval);
-        if (!popup.closed) {
-          popup.close();
-          setIsSaving(false);
-          setError("OAuth timeout. Please try again.");
-        }
-      }, 5 * 60 * 1000);
-
+      setOauthUrl(authUrl);
     } catch (err) {
       console.error("[oauth] Failed:", err);
       setError(err instanceof Error ? err.message : "OAuth failed");
+    } finally {
       setIsSaving(false);
     }
+  };
+
+  const handleCopyUrl = async () => {
+    if (!oauthUrl) return;
+    await navigator.clipboard.writeText(oauthUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleOAuthComplete = async () => {
+    if (!callbackUrl.trim()) {
+      setError("Please paste the callback URL");
+      return;
+    }
+
+    setIsSaving(true);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/oauth/callback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ callbackUrl: callbackUrl.trim() }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || "OAuth callback failed");
+      }
+
+      setOauthSuccess(true);
+      setTimeout(() => onClose(), 2000);
+    } catch (err) {
+      console.error("[oauth] Callback failed:", err);
+      setError(err instanceof Error ? err.message : "Failed to complete sign in");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleOAuthReset = () => {
+    setOauthUrl(null);
+    setCallbackUrl("");
+    setError(null);
   };
 
   const handleDelete = () => {
@@ -456,25 +481,107 @@ export function ProviderEditor({ isOpen, onClose, editingProvider }: ProviderEdi
                       </div>
                     ))
                   ) : (
-                    /* OAuth flow - show connect button */
+                    /* OAuth flow - copy-paste approach for remote server compatibility */
                     <div className="space-y-3">
-                      <p className="text-sm text-muted-foreground">
-                        Click the button below to sign in with your {providerConfig.name} account.
-                      </p>
-                      <Button
-                        onClick={handleOAuthLogin}
-                        disabled={isSaving}
-                        className="w-full"
-                      >
-                        {isSaving ? (
-                          <>
-                            <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                            Connecting...
-                          </>
-                        ) : (
-                          `Sign in with ${providerConfig.name}`
-                        )}
-                      </Button>
+                      {oauthSuccess ? (
+                        <div className="flex flex-col items-center gap-2 py-4">
+                          <CheckCircle className="h-10 w-10 text-green-500" />
+                          <p className="text-sm font-medium">Successfully connected!</p>
+                          <p className="text-xs text-muted-foreground">Your {providerConfig.name} account has been linked.</p>
+                        </div>
+                      ) : !oauthUrl ? (
+                        <>
+                          <p className="text-sm text-muted-foreground">
+                            Click the button below to start signing in with your {providerConfig.name} account.
+                          </p>
+                          <Button
+                            onClick={handleOAuthLogin}
+                            disabled={isSaving}
+                            className="w-full"
+                          >
+                            {isSaving ? (
+                              <>
+                                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                                Preparing...
+                              </>
+                            ) : (
+                              `Sign in with ${providerConfig.name}`
+                            )}
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          {/* Step 1: Auth URL */}
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium">Step 1: Open this URL and sign in</label>
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                value={oauthUrl}
+                                readOnly
+                                className="flex-1 h-9 px-3 rounded-md border border-input bg-muted text-xs font-mono truncate"
+                              />
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={handleCopyUrl}
+                                className="shrink-0 h-9"
+                              >
+                                {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                              </Button>
+                            </div>
+                            <a
+                              href={oauthUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                            >
+                              Open in new tab
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+                          </div>
+
+                          {/* Step 2: Paste callback URL */}
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium">Step 2: Paste the callback URL</label>
+                            <p className="text-xs text-muted-foreground">
+                              After signing in, your browser will redirect to a page that may not load.
+                              Copy the full URL from your browser's address bar and paste it here.
+                            </p>
+                            <input
+                              type="text"
+                              value={callbackUrl}
+                              onChange={(e) => { setCallbackUrl(e.target.value); setError(null); }}
+                              placeholder="http://127.0.0.1:1455/auth/callback?code=...&state=..."
+                              className="w-full h-10 px-3 rounded-md border border-input bg-background text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary"
+                            />
+                          </div>
+
+                          {/* Complete button */}
+                          <Button
+                            onClick={handleOAuthComplete}
+                            disabled={isSaving || !callbackUrl.trim()}
+                            className="w-full"
+                          >
+                            {isSaving ? (
+                              <>
+                                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                                Completing...
+                              </>
+                            ) : (
+                              "Complete Sign In"
+                            )}
+                          </Button>
+
+                          {/* Start over link */}
+                          <button
+                            onClick={handleOAuthReset}
+                            className="text-xs text-muted-foreground hover:text-foreground underline"
+                          >
+                            Start over
+                          </button>
+                        </>
+                      )}
                     </div>
                   )}
 
